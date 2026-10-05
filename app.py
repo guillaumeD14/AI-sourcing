@@ -230,7 +230,7 @@ def analyze_pdf(pdf_bytes: bytes, file_name: str) -> dict:
     }
 
 
-def build_search_terms(query: str) -> list"""
+def build_search_terms(query: str**-> list:
     Produit des termes de recherche simples.
     Cette première version fonctionne sans API IA.
     """
