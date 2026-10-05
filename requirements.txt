@@ -1,5 +1,5 @@
 streamlit==1.65.0
-PyMu**F==1.26.4
-**ndas==3.0.6
+PyMuPDF==1.26.4
+pandas==3.0.6
 rapidfuzz==3.14.1
-Pil**w==12.3.0
+Pillow==12.3.0
