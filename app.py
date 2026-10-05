@@ -1,7 +1,6 @@
 import io
 import re
 import unicodedata
-from dataclasses import dataclass, asdict
 from pathlib import Path
 
 import fitz
@@ -10,856 +9,246 @@ import streamlit as st
 from PIL import Image
 from rapidfuzz import fuzz
 
-
-# ==========================================================
-# CONFIGURATION
-# ==========================================================
-
-st.set_page_config(
-    page_title="AI Sourcing",
-    page_icon="🔎",
-    layout="wide",
-)
+st.set_page_config(page_title="AI Sourcing", page_icon="🔎", layout="wide")
 
 
-# ==========================================================
-# MODELE DE DONNEES
-# ==========================================================
-
-@dataclass
-class Product:
-    supplier: str
-    product_name: str
-    weight: str
-    reference: str
-    packaging_1: str
-    packaging_2: str
-    page: int
-    source_file: str
-    source_text: str
-
-
-# ==========================================================
-# FONCTIONS UTILITAIRES
-# ==========================================================
-
-def normalize_text(text: str) -> str:
-    """
-    Normalise le texte pour améliorer la recherche :
-    - suppression des accents ;
-    - conversion en majuscules ;
-    - suppression des caractères inutiles ;
-    - réduction des espaces.
-    """
+def normalize_text(text):
     if not text:
         return ""
-
-    text = unicodedata.normalize("NFKD", text)
-    text = "".join(
-        character
-        for character in text
-        if not unicodedata.combining(character)
-    )
-
+    text = unicodedata.normalize("NFKD", str(text))
+    text = "".join(c for c in text if not unicodedata.combining(c))
     text = text.upper()
-    text = re.sub(r"[^A-Z0-9\s/-]", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-
-    return text
+    text = re.sub(r"[^A-Z0-9\s/.,'-]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
-def detect_supplier(file_name: str, full_text: str) -> str:
-    """
-    Essaye d'identifier le fournisseur à partir du nom du fichier
-    ou du contenu du PDF.
-    """
-    normalized_text = normalize_text(full_text)
-
-    known_suppliers = {
-        "ARGRU": "ARGRU",
-    }
-
-    for keyword, supplier_name in known_suppliers.items():
-        if keyword in normalized_text:
-            return supplier_name
-
-    file_stem = Path(file_name).stem
-    first_word = re.split(r"[\s_-]+", file_stem)[0]
-
-    return first_word.upper() if first_word else "FOURNISSEUR INCONNU"
+def detect_supplier(filename, text):
+    searchable = normalize_text(filename + " " + text[:5000])
+    if "ARGRU" in searchable:
+        return "ARGRU"
+    stem = Path(filename).stem
+    return re.split(r"[\s_-]+", stem)[0].upper() or "INCONNU"
 
 
-def extract_weight(product_name: str) -> str:
-    """
-    Extrait le grammage du nom du produit.
-    Exemples :
-    MINI BRETZEL 40G -> 40 g
-    PARIS-BREST 120GX2 -> 120 g x 2
-    PAIN DE CAMPAGNE 1KG -> 1 kg
-    """
-    normalized_name = normalize_text(product_name)
-
-    multiplied_weight = re.search(
-        r"\b(\d+(?:[.,]\d+)?)\s*(G|KG)\s*X\s*(\d+)\b",
-        normalized_name,
-    )
-
-    if multiplied_weight:
-        value = multiplied_weight.group(1).replace(",", ".")
-        unit = multiplied_weight.group(2).lower()
-        quantity = multiplied_weight.group(3)
-        return f"{value} {unit} x {quantity}"
-
-    simple_weight = re.search(
-        r"\b(\d+(?:[.,]\d+)?)\s*(G|KG)\b",
-        normalized_name,
-    )
-
-    if simple_weight:
-        value = simple_weight.group(1).replace(",", ".")
-        unit = simple_weight.group(2).lower()
-        return f"{value} {unit}"
-
-    return "Non communiqué"
-
-
-def parse_product_line(
-    line: str,
-    supplier: str,
-    page_number: int,
-    file_name: str,
-) -> Product | None:
-    """
-    Détecte les lignes du type :
-
-    MINI BRETZEL 40G 600400 144 44
-
-    La logique considère les 3 derniers nombres comme :
-    - référence ;
-    - premier champ de conditionnement ;
-    - second champ de conditionnement.
-    """
-    cleaned_line = re.sub(r"\s+", " ", line).strip()
-
-    pattern = re.compile(
-        r"^(?P<name>.+?)\s+"
-        r"(?P<reference>\d{5,8})\s+"
-        r"(?P<packaging_1>\d+)\s+"
-        r"(?P<packaging_2>\d+)$"
-    )
-
-    match = pattern.match(cleaned_line)
-
+def extract_weight(text):
+    match = re.search(r"\b(\d+(?:[.,]\d+)?)\s*(KG|G)\b", normalize_text(text))
     if not match:
-        return None
+        return "Non communiqué"
+    value = match.group(1).replace(",", ".")
+    return f"{value} {match.group(2).lower()}"
 
-    product_name = match.group("name").strip()
 
-    if len(product_name) < 3:
-        return None
+def candidate_product_lines(page_text):
+    lines = [re.sub(r"\s+", " ", x).strip() for x in page_text.splitlines()]
+    return [x for x in lines if len(x) >= 5]
 
-    return Product(
-        supplier=supplier,
-        product_name=product_name,
-        weight=extract_weight(product_name),
-        reference=match.group("reference"),
-        packaging_1=match.group("packaging_1"),
-        packaging_2=match.group("packaging_2"),
-        page=page_number,
-        source_file=file_name,
-        source_text=cleaned_line,
-    )
+
+def parse_product_line(line, supplier, page, filename):
+    patterns = [
+        re.compile(r"^(?P<name>.+?)\s+(?P<ref>\d{5,8})\s+(?P<p1>\d+)\s+(?P<p2>\d+)$"),
+        re.compile(r"^(?P<name>.+?)\s+(?P<ref>\d{5,8})\s+(?P<p1>\d+)$"),
+    ]
+    for pattern in patterns:
+        match = pattern.match(line)
+        if match:
+            name = match.group("name").strip(" -")
+            if len(name) < 3 or not re.search(r"[A-Za-zÀ-ÿ]", name):
+                return None
+            return {
+                "Fournisseur": supplier,
+                "Produit": name,
+                "Poids": extract_weight(name),
+                "Référence": match.group("ref"),
+                "Conditionnement 1": match.groupdict().get("p1", ""),
+                "Conditionnement 2": match.groupdict().get("p2", ""),
+                "Page": page,
+                "Catalogue": filename,
+                "Texte source": line,
+            }
+    return None
 
 
 @st.cache_data(show_spinner=False)
-def analyze_pdf(pdf_bytes: bytes, file_name: str) -> dict:
-    """
-    Lit un PDF et extrait :
-    - le texte par page ;
-    - les produits détectés ;
-    - le fournisseur ;
-    - quelques statistiques.
-    """
-    document = fitz.open(stream=pdf_bytes, filetype="pdf")
-
+def analyze_pdf(pdf_bytes, filename):
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pages = []
-    all_text_parts = []
-
-    for page_index in range(document.page_count):
-        page = document.load_page(page_index)
-        page_text = page.get_text("text")
-
-        pages.append(
-            {
-                "page": page_index + 1,
-                "text": page_text,
-            }
-        )
-
-        all_text_parts.append(page_text)
-
-    full_text = "\n".join(all_text_parts)
-    supplier = detect_supplier(file_name, full_text)
-
+    all_text = []
+    for index in range(doc.page_count):
+        text = doc.load_page(index).get_text("text")
+        pages.append({"page": index + 1, "text": text})
+        all_text.append(text)
+    supplier = detect_supplier(filename, "\n".join(all_text))
     products = []
-
-    for page_data in pages:
-        page_number = page_data["page"]
-        page_text = page_data["text"]
-
-        for raw_line in page_text.splitlines():
-            product = parse_product_line(
-                line=raw_line,
-                supplier=supplier,
-                page_number=page_number,
-                file_name=file_name,
-            )
-
+    for page in pages:
+        for line in candidate_product_lines(page["text"]):
+            product = parse_product_line(line, supplier, page["page"], filename)
             if product:
-                products.append(asdict(product))
-
-    document.close()
-
+                products.append(product)
+    doc.close()
     return {
         "supplier": supplier,
-        "file_name": file_name,
+        "filename": filename,
         "page_count": len(pages),
         "pages": pages,
         "products": products,
-        "full_text": full_text,
     }
 
 
-def build_search_terms(query: str**-> list:
-    Produit des termes de recherche simples.
-    Cette première version fonctionne sans API IA.
-    """
-    normalized_query = normalize_text(query)
-
-    synonym_groups = {
-        "DANISH": [
-            "DANISH",
-            "VIENNOISERIE",
-            "VIENNOISERIES",
-            "STREUSSEL",
-            "STREUSEL",
-        ],
-        "BRETZEL": [
-            "BRETZEL",
-            "PRETZEL",
-        ],
-        "BEIGNET": [
-            "BEIGNET",
-            "DONUT",
-            "DOUGHNUT",
-        ],
-        "PAIN": [
-            "PAIN",
-            "BAGUETTE",
-            "BREAD",
-            "PETIT PAIN",
-        ],
-    }
-
-    terms = [normalized_query]
-
-    for keyword, synonyms in synonym_groups.items():
-        if keyword in normalized_query:
-            terms.extend(synonyms)
-
-    unique_terms = []
-
-    for term in terms:
-        term = normalize_text(term)
-
-        if term and term not in unique_terms:
-            unique_terms.append(term)
-
-    return unique_terms
+def similarity(query, product, requested_weight=""):
+    q = normalize_text(query)
+    p = normalize_text(product)
+    score = 0.65 * fuzz.token_set_ratio(q, p) + 0.35 * fuzz.partial_ratio(q, p)
+    q_weight = re.search(r"(\d+(?:[.,]\d+)?)", requested_weight or q)
+    p_weight = re.search(r"(\d+(?:[.,]\d+)?)\s*(?:G|KG)", p)
+    if q_weight and p_weight:
+        diff = abs(float(q_weight.group(1).replace(",", ".")) - float(p_weight.group(1).replace(",", ".")))
+        if diff == 0:
+            score += 15
+        elif diff <= 5:
+            score += 10
+        elif diff <= 10:
+            score += 5
+    return round(min(score, 100), 1)
 
 
-def calculate_similarity(
-    query: str,
-    product_name: str,
-    target_weight: str,
-    product_weight: str,
-) -> float:
-    """
-    Calcule un score indicatif à partir du nom du produit,
-    des mots communs et de la proximité du grammage.
-    """
-    normalized_query = normalize_text(query)
-    normalized_product = normalize_text(product_name)
-
-    ratio_score = fuzz.token_set_ratio(
-        normalized_query,
-        normalized_product,
-    )
-
-    partial_score = fuzz.partial_ratio(
-        normalized_query,
-        normalized_product,
-    )
-
-    semantic_score = (
-        ratio_score * 0.65
-        + partial_score * 0.35
-    )
-
-    query_terms = build_search_terms(query)
-    synonym_bonus = 0
-
-    for term in query_terms:
-        if term and term in normalized_product:
-            synonym_bonus = max(synonym_bonus, 15)
-
-    weight_bonus = 0
-
-    target_weight_match = re.search(
-        r"(\d+(?:[.,]\d+)?)",
-        target_weight or "",
-    )
-
-    product_weight_match = re.search(
-        r"(\d+(?:[.,]\d+)?)",
-        product_weight or "",
-    )
-
-    if target_weight_match and product_weight_match:
-        requested = float(
-            target_weight_match.group(1).replace(",", ".")
-        )
-
-        found = float(
-            product_weight_match.group(1).replace(",", ".")
-        )
-
-        difference = abs(requested - found)
-
-        if difference == 0:
-            weight_bonus = 15
-        elif difference <= 5:
-            weight_bonus = 12
-        elif difference <= 10:
-            weight_bonus = 8
-        elif difference <= 20:
-            weight_bonus = 3
-
-    final_score = (
-        semantic_score
-        + synonym_bonus
-        + weight_bonus
-    )
-
-    return round(min(final_score, 100), 1)
-
-
-def search_products(
-    analyses: list[dict],
-    query: str,
-    target_weight: str,
-) -> pd.DataFrame:
-    """
-    Recherche dans tous les produits extraits des PDF.
-    """
-    result_rows = []
-
-    for analysis in analyses:
-        for product in analysis["products"]:
-            similarity = calculate_similarity(
-                query=query,
-                product_name=product["product_name"],
-                target_weight=target_weight,
-                product_weight=product["weight"],
-            )
-
-            result_rows.append(
-                {
-                    "Fournisseur": product["supplier"],
-                    "Produit": product["product_name"],
-                    "Poids": product["weight"],
-                    "Référence": product["reference"],
-                    "Conditionnement 1": product["packaging_1"],
-                    "Conditionnement 2": product["packaging_2"],
-                    "Similarité": similarity,
-                    "Page": product["page"],
-                    "Catalogue": product["source_file"],
-                }
-            )
-
-    if not result_rows:
-        return pd.DataFrame()
-
-    result_frame = pd.DataFrame(result_rows)
-
-    result_frame = result_frame.sort_values(
-        by="Similarité",
-        ascending=False,
-    ).reset_index(drop=True)
-
-    return result_frame
-
-
-def render_pdf_page(
-    pdf_bytes: bytes,
-    page_number: int,
-    zoom: float = 1.5,
-) -> Image.Image:
-    """
-    Transforme une page PDF en image pour prévisualisation.
-    """
-    document = fitz.open(
-        stream=pdf_bytes,
-        filetype="pdf",
-    )
-
-    page = document.load_page(page_number - 1)
-
-    matrix = fitz.Matrix(zoom, zoom)
-    pixmap = page.get_pixmap(
-        matrix=matrix,
-        alpha=False,
-    )
-
-    image = Image.open(
-        io.BytesIO(pixmap.tobytes("png"))
-    )
-
-    document.close()
-
+def render_page(pdf_bytes, page_number):
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    pix = doc.load_page(page_number - 1).get_pixmap(matrix=fitz.Matrix(1.4, 1.4), alpha=False)
+    image = Image.open(io.BytesIO(pix.tobytes("png")))
+    doc.close()
     return image
 
 
-# ==========================================================
-# ETAT DE SESSION
-# ==========================================================
-
-if "catalogue_analyses" not in st.session_state:
-    st.session_state.catalogue_analyses = []
-
-if "catalogue_files" not in st.session_state:
-    st.session_state.catalogue_files = {}
-
-
-# ==========================================================
-# EN-TETE
-# ==========================================================
+if "analyses" not in st.session_state:
+    st.session_state.analyses = []
+if "pdf_files" not in st.session_state:
+    st.session_state.pdf_files = {}
 
 st.title("🔎 AI Sourcing")
-
-st.caption(
-    "Recherche de produits similaires dans les catalogues fournisseurs"
-)
-
-st.info(
-    """
-    Cette première version analyse les catalogues PDF chargés pendant
-    la session. Les fichiers ne sont pas ajoutés au dépôt GitHub.
-    """
-)
-
-
-# ==========================================================
-# BARRE LATERALE : CATALOGUES
-# ==========================================================
+st.caption("Recherche de produits dans les catalogues fournisseurs")
 
 with st.sidebar:
-    st.header("📁 Base catalogues")
-
-    uploaded_catalogues = st.file_uploader(
-        "Ajouter des catalogues fournisseurs",
+    st.header("📁 Catalogues")
+    uploads = st.file_uploader(
+        "Ajouter un ou plusieurs PDF",
         type=["pdf"],
         accept_multiple_files=True,
     )
-
-    analyze_button = st.button(
-        "📥 Analyser les catalogues",
-        use_container_width=True,
-    )
-
-    if analyze_button:
-        if not uploaded_catalogues:
-            st.warning("Ajoutez au moins un catalogue PDF.")
-
+    if st.button("Analyser les catalogues", type="primary", use_container_width=True):
+        if not uploads:
+            st.warning("Ajoute au moins un PDF.")
         else:
-            new_analyses = []
-            new_files = {}
+            analyses = []
+            files = {}
+            progress = st.progress(0)
+            for index, uploaded in enumerate(uploads, start=1):
+                raw = uploaded.getvalue()
+                analyses.append(analyze_pdf(raw, uploaded.name))
+                files[uploaded.name] = raw
+                progress.progress(index / len(uploads))
+            st.session_state.analyses = analyses
+            st.session_state.pdf_files = files
+            st.success(f"{len(uploads)} catalogue(s) analysé(s).")
 
-            progress_bar = st.progress(0)
-            status_placeholder = st.empty()
-
-            total_files = len(uploaded_catalogues)
-
-            for index, uploaded_file in enumerate(
-                uploaded_catalogues,
-                start=1,
-            ):
-                status_placeholder.write(
-                    f"Analyse de {uploaded_file.name}..."
-                )
-
-                pdf_bytes = uploaded_file.getvalue()
-
-                analysis = analyze_pdf(
-                    pdf_bytes=pdf_bytes,
-                    file_name=uploaded_file.name,
-                )
-
-                new_analyses.append(analysis)
-                new_files[uploaded_file.name] = pdf_bytes
-
-                progress_bar.progress(index / total_files)
-
-            st.session_state.catalogue_analyses = new_analyses
-            st.session_state.catalogue_files = new_files
-
-            status_placeholder.success(
-                f"{total_files} catalogue(s) analysé(s)."
-            )
-
-    st.divider()
-
-    if st.session_state.catalogue_analyses:
-        st.subheader("Catalogues actifs")
-
-        for analysis in st.session_state.catalogue_analyses:
-            st.write(
-                f"**{analysis['supplier']}**"
-            )
+    if st.session_state.analyses:
+        st.divider()
+        for analysis in st.session_state.analyses:
+            st.write(f"**{analysis['supplier']}**")
             st.caption(
-                f"{analysis['file_name']} · "
-                f"{analysis['page_count']} pages · "
+                f"{analysis['filename']} · {analysis['page_count']} pages · "
                 f"{len(analysis['products'])} produits détectés"
             )
 
-    if st.button(
-        "🗑️ Vider la session",
-        use_container_width=True,
-    ):
-        st.session_state.catalogue_analyses = []
-        st.session_state.catalogue_files = {}
+    if st.button("Vider la session", use_container_width=True):
+        st.session_state.analyses = []
+        st.session_state.pdf_files = {}
         st.rerun()
 
-
-# ==========================================================
-# ONGLET 1 : RECHERCHE
-# ==========================================================
-
-search_tab, database_tab, diagnostics_tab = st.tabs(
-    [
-        "🔎 Recherche",
-        "📚 Base produits",
-        "🛠️ Diagnostic PDF",
-    ]
-)
-
+search_tab, base_tab, diagnostic_tab = st.tabs(["🔎 Recherche", "📚 Base produits", "🛠 Diagnostic"])
 
 with search_tab:
-    st.header("🎯 Rechercher un produit")
+    st.header("Rechercher un produit")
+    query = st.text_input("Produit recherché", placeholder="Exemple : mini bretzel 40 g")
+    weight = st.text_input("Grammage cible, facultatif", placeholder="Exemple : 40 g")
+    limit = st.slider("Nombre de résultats", 5, 50, 15, 5)
+    image = st.file_uploader("Photo de référence, facultative", type=["png", "jpg", "jpeg", "webp"])
+    sheet = st.file_uploader("Fiche technique similaire, facultative", type=["pdf"], key="sheet")
+    if image:
+        st.image(image, caption="Photo de référence", width=300)
+    if sheet:
+        st.info("La fiche est chargée. Son analyse IA sera ajoutée dans une prochaine étape.")
 
-    product_query = st.text_input(
-        "Produit recherché",
-        placeholder="Exemple : mini bretzel 40 g",
-    )
-
-    col_1, col_2 = st.columns(2)
-
-    with col_1:
-        target_weight = st.text_input(
-            "Grammage cible, facultatif",
-            placeholder="Exemple : 40 g",
-        )
-
-    with col_2:
-        maximum_results = st.slider(
-            "Nombre de résultats",
-            min_value=5,
-            max_value=50,
-            value=15,
-            step=5,
-        )
-
-    product_image = st.file_uploader(
-        "🖼️ Photo du produit, facultative",
-        type=["png", "jpg", "jpeg", "webp"],
-        key="search_image",
-    )
-
-    reference_sheet = st.file_uploader(
-        "📄 Fiche technique similaire, facultative",
-        type=["pdf"],
-        key="reference_sheet",
-    )
-
-    if product_image:
-        st.image(
-            product_image,
-            caption="Photo du produit recherché",
-            width=300,
-        )
-
-    if reference_sheet:
-        st.success(
-            f"Fiche de référence chargée : {reference_sheet.name}"
-        )
-        st.caption(
-            "L'analyse technique de cette fiche sera ajoutée "
-            "dans la prochaine version."
-        )
-
-    launch_search = st.button(
-        "🔎 LANCER LA RECHERCHE",
-        type="primary",
-        use_container_width=True,
-    )
-
-    if launch_search:
-        if not product_query:
-            st.warning("Indiquez le produit recherché.")
-
-        elif not st.session_state.catalogue_analyses:
-            st.warning(
-                "Ajoutez et analysez au moins un catalogue "
-                "dans la barre latérale."
-            )
-
+    if st.button("Lancer la recherche", type="primary", use_container_width=True):
+        if not query:
+            st.warning("Indique le produit recherché.")
+        elif not st.session_state.analyses:
+            st.warning("Ajoute et analyse d'abord au moins un catalogue.")
         else:
-            result_frame = search_products(
-                analyses=st.session_state.catalogue_analyses,
-                query=product_query,
-                target_weight=target_weight,
-            )
-
-            if result_frame.empty:
-                st.error(
-                    "Aucun produit structuré n'a été détecté "
-                    "dans les catalogues."
-                )
-
+            rows = []
+            for analysis in st.session_state.analyses:
+                for product in analysis["products"]:
+                    row = dict(product)
+                    row["Similarité"] = similarity(query, product["Produit"], weight)
+                    rows.append(row)
+            if not rows:
+                st.error("Aucun produit structuré détecté. Consulte l'onglet Diagnostic.")
             else:
-                displayed_results = (
-                    result_frame
-                    .head(maximum_results)
-                    .copy()
-                )
-
-                displayed_results["Similarité"] = (
-                    displayed_results["Similarité"]
-                    .map(lambda value: f"{value:.1f} %")
-                )
-
-                st.subheader(
-                    f"Résultats pour « {product_query} »"
-                )
-
+                results = pd.DataFrame(rows).sort_values("Similarité", ascending=False).head(limit)
                 st.dataframe(
-                    displayed_results,
+                    results[["Fournisseur", "Produit", "Poids", "Référence", "Similarité", "Page", "Catalogue"]],
                     use_container_width=True,
                     hide_index=True,
                 )
-
                 st.download_button(
-                    "⬇️ Télécharger les résultats en CSV",
-                    displayed_results.to_csv(
-                        index=False,
-                    ).encode("utf-8-sig"),
-                    file_name="resultats_sourcing.csv",
-                    mime="text/csv",
+                    "Télécharger les résultats CSV",
+                    results.to_csv(index=False).encode("utf-8-sig"),
+                    "resultats_sourcing.csv",
+                    "text/csv",
                 )
-
                 st.subheader("Aperçu des meilleurs résultats")
+                for rank, (_, row) in enumerate(results.head(5).iterrows(), start=1):
+                    with st.expander(f"{rank}. {row['Fournisseur']} | {row['Produit']} | {row['Similarité']} %"):
+                        left, right = st.columns([1, 1.4])
+                        with left:
+                            st.write(f"**Référence :** {row['Référence']}")
+                            st.write(f"**Poids :** {row['Poids']}")
+                            st.write(f"**Page :** {row['Page']}")
+                            st.write(f"**Catalogue :** {row['Catalogue']}")
+                        with right:
+                            raw = st.session_state.pdf_files.get(row["Catalogue"])
+                            if raw:
+                                st.image(render_page(raw, int(row["Page"])), use_container_width=True)
 
-                raw_top_results = (
-                    result_frame
-                    .head(min(5, maximum_results))
-                )
-
-                for row_index, row in raw_top_results.iterrows():
-                    with st.expander(
-                        f"{row_index + 1}. "
-                        f"{row['Fournisseur']} · "
-                        f"{row['Produit']} · "
-                        f"{row['Similarité']:.1f} %"
-                    ):
-                        detail_col, preview_col = st.columns(
-                            [1, 1.4]
-                        )
-
-                        with detail_col:
-                            st.write(
-                                f"**Référence :** {row['Référence']}"
-                            )
-                            st.write(
-                                f"**Poids :** {row['Poids']}"
-                            )
-                            st.write(
-                                f"**Page :** {row['Page']}"
-                            )
-                            st.write(
-                                f"**Catalogue :** {row['Catalogue']}"
-                            )
-                            st.write(
-                                "**Source :** base interne"
-                            )
-
-                        with preview_col:
-                            pdf_bytes = (
-                                st.session_state.catalogue_files
-                                .get(row["Catalogue"])
-                            )
-
-                            if pdf_bytes:
-                                page_image = render_pdf_page(
-                                    pdf_bytes=pdf_bytes,
-                                    page_number=int(row["Page"]),
-                                )
-
-                                st.image(
-                                    page_image,
-                                    caption=(
-                                        f"Page {row['Page']} du catalogue"
-                                    ),
-                                    use_container_width=True,
-                                )
-
-
-# ==========================================================
-# ONGLET 2 : BASE PRODUITS
-# ==========================================================
-
-with database_tab:
-    st.header("📚 Produits extraits")
-
-    if not st.session_state.catalogue_analyses:
-        st.info(
-            "Ajoutez et analysez un catalogue pour afficher la base."
-        )
-
+with base_tab:
+    st.header("Produits extraits")
+    products = [p for a in st.session_state.analyses for p in a["products"]]
+    if not products:
+        st.info("Aucun produit extrait pour le moment.")
     else:
-        all_products = []
-
-        for analysis in st.session_state.catalogue_analyses:
-            all_products.extend(analysis["products"])
-
-        products_frame = pd.DataFrame(all_products)
-
-        if products_frame.empty:
-            st.warning(
-                "Aucune ligne produit structurée n'a été détectée."
-            )
-
-        else:
-            display_columns = {
-                "supplier": "Fournisseur",
-                "product_name": "Produit",
-                "weight": "Poids",
-                "reference": "Référence",
-                "packaging_1": "Conditionnement 1",
-                "packaging_2": "Conditionnement 2",
-                "page": "Page",
-                "source_file": "Catalogue",
-            }
-
-            displayed_products = (
-                products_frame[
-                    list(display_columns.keys())
-                ]
-                .rename(columns=display_columns)
-            )
-
-            st.metric(
-                "Produits détectés",
-                len(displayed_products),
-            )
-
-            st.dataframe(
-                displayed_products,
-                use_container_width=True,
-                hide_index=True,
-            )
-
-            st.download_button(
-                "⬇️ Exporter la base en CSV",
-                displayed_products.to_csv(
-                    index=False,
-                ).encode("utf-8-sig"),
-                file_name="base_produits_catalogues.csv",
-                mime="text/csv",
-            )
-
-
-# ==========================================================
-# ONGLET 3 : DIAGNOSTIC
-# ==========================================================
-
-with diagnostics_tab:
-    st.header("🛠️ Diagnostic d'extraction")
-
-    if not st.session_state.catalogue_analyses:
-        st.info(
-            "Ajoutez et analysez un catalogue pour voir "
-            "le texte extrait."
+        frame = pd.DataFrame(products)
+        st.metric("Produits détectés", len(frame))
+        st.dataframe(frame, use_container_width=True, hide_index=True)
+        st.download_button(
+            "Exporter la base CSV",
+            frame.to_csv(index=False).encode("utf-8-sig"),
+            "base_catalogues.csv",
+            "text/csv",
         )
 
+with diagnostic_tab:
+    st.header("Diagnostic PDF")
+    if not st.session_state.analyses:
+        st.info("Analyse un catalogue pour afficher le texte extrait.")
     else:
-        diagnostic_catalogue = st.selectbox(
-            "Catalogue",
-            options=[
-                analysis["file_name"]
-                for analysis
-                in st.session_state.catalogue_analyses
-            ],
-        )
-
-        selected_analysis = next(
-            analysis
-            for analysis in st.session_state.catalogue_analyses
-            if analysis["file_name"] == diagnostic_catalogue
-        )
-
-        diagnostic_page = st.number_input(
-            "Page",
-            min_value=1,
-            max_value=selected_analysis["page_count"],
-            value=1,
-            step=1,
-        )
-
-        page_data = selected_analysis["pages"][
-            int(diagnostic_page) - 1
-        ]
-
-        st.text_area(
-            "Texte extrait",
-            value=page_data["text"],
-            height=350,
-        )
-
-        pdf_bytes = (
-            st.session_state.catalogue_files
-            .get(diagnostic_catalogue)
-        )
-
-        if pdf_bytes:
-            diagnostic_image = render_pdf_page(
-                pdf_bytes=pdf_bytes,
-                page_number=int(diagnostic_page),
-            )
-
-            st.image(
-                diagnostic_image,
-                caption=f"Page {diagnostic_page}",
-                use_container_width=True,
-            )
-
-
-# ==========================================================
-# PIED DE PAGE
-# ==========================================================
+        names = [a["filename"] for a in st.session_state.analyses]
+        selected_name = st.selectbox("Catalogue", names)
+        selected = next(a for a in st.session_state.analyses if a["filename"] == selected_name)
+        page_number = st.number_input("Page", 1, selected["page_count"], 1)
+        page = selected["pages"][int(page_number) - 1]
+        st.text_area("Texte extrait", page["text"], height=350)
+        raw = st.session_state.pdf_files.get(selected_name)
+        if raw:
+            st.image(render_page(raw, int(page_number)), use_container_width=True)
 
 st.divider()
-
-st.caption(
-    "Prototype AI Sourcing · Les correspondances et données fournisseurs "
-    "doivent être vérifiées avant tout contact ou décision d'achat."
-)
+st.caption("Prototype de sourcing. Vérifie toujours les informations avant de contacter un fournisseur.")
