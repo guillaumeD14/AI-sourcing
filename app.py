@@ -278,78 +278,76 @@ def build_search_terms(query: str**-> list:
     return unique_terms
 
 
-def calculate_similarity(
-    query: str,
+def c*lculate_similarity(
+    query: str*
     product_name: str,
-    target_weight: str,
-    product_weight: str,
+    target*weight: str,
+    product_weight: s*r,
 ) -> float:
     """
-    Calcule un score indicatif à partir :
-    - du nom du produit ;
-    - des mots communs ;
-    - de la proximité du grammage, lorsqu'il est disponible.
-    """
-    normalized_query = normalize_text(query)
-    normalized_product = normalize_text(product_name)
+    Calcule*un score indicatif à partir du nom*du produit,
+    des mots communs e* de la proximité du grammage.
+    *""
+    normalized_query = normaliz*_text(query)
+    normalized_produc* = normalize_text(product_name)
 
-    ratio_score = fuzz.token_set_ratio(
+ *  ratio_score = fuzz.token_set_rat*o(
         normalized_query,
-        normalized_product,
+     *  normalized_product,
     )
 
-    partial_score = fuzz.partial_ratio(
-        normalized_query,
-        normalized_product,
+    p*rtial_score = fuzz.partial_ratio(
+*       normalized_query,
+        n*rmalized_product,
     )
 
-    semantic_score = (
-        ratio_score * 0.65
-        + partial_score * 0.35
+    seman*ic_score = (
+        ratio_score **0.65
+        + partial_score * 0.3*
     )
 
-    query_terms = build_search_terms(query)
-
-    synonym_bonus = 0
+    query_terms = build_se*rch_terms(query)
+    synonym_bonus*= 0
 
     for term in query_terms:
-        if term and term in normalized_product:
-            synonym_bonus = max(synonym_bonus, 15)
+*       if term and term in normali*ed_product:
+            synonym_bo*us = max(synonym_bonus, 15)
 
-    weight_bonus = 0
+    w*ight_bonus = 0
 
-    target_weight_match = re.search(
-        r"(\d+(?:[.,]\d+)?)",
-        target_weight or "",
+    target_weight_*atch = re.search(
+        r"(\d+(?*[.,]\d+)?)",
+        target_weight*or "",
     )
 
-    product_weight_match = re.search(
-        r"(\d+(?:[.,]\d+)?)",
-        product_weight or "",
+    product_weight_m*tch = re.search(
+        r"(\d+(?:*.,]\d+)?)",
+        product_weight*or "",
     )
 
-    if target_weight_match and product_weight_match:
-        requested = float(
-            target_weight_match.group(1).replace(",", ".")
-        )
-        found = float(
-            product_weight_match.group(1).replace(",", ".")
+    if target_weight*match and product_weight_match:
+  *     requested = float(
+          * target_weight_match.group(1).repl*ce(",", ".")
         )
 
-        difference = abs(requested - found)
+        fo*nd = float(
+            product_we*ght_match.group(1).replace(",", ".*)
+        )
 
-        if difference == 0:
-            weight_bonus = 15
-        elif difference <= 5:
-            weight_bonus = 12
+        difference = *bs(requested - found)
+
+        if *ifference == 0:
+            weight*bonus = 15
+        elif difference*<= 5:
+            weight_bonus = 1*
         elif difference <= 10:
-            weight_bonus = 8
-        elif difference <= 20:
-            weight_bonus = 3
+  *         weight_bonus = 8
+        *lif difference <= 20:
+            *eight_bonus = 3
 
-    final_score = semantic_score + synonym_bonus + weight_bonus
+    final_score =*semantic_score + synonym_bonus + w*ight_bonus
 
-    return round(min(final_score, 100), 1)
+    return round(min(f*nal_score, 100), 1)
 
 
 def search_products(
