@@ -1,8 +1,0 @@
-streamlit==1.65.0
-boto3==1.40.45
-PyMuPDF==1.26.4
-pandas==3.0.6
-rapidfuzz==3.14.1
-Pillow==12.3.0
-requests==2.34.2
-scikit-learn==1.7.2
