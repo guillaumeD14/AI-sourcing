@@ -1,0 +1,23 @@
+# Secrets : ne jamais versionner
+.streamlit/secrets.toml
+.env
+*.env
+
+# Index local (reconstruit depuis Cloudinary) et fichiers temporaires
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+data/index/*
+!data/index/.gitkeep
+upload_*/
+sourcing_*/
+
+# Sauvegarde créée par run_claude.sh / run_claude.ps1
+baseline_before_claude/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
