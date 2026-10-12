@@ -1,0 +1,6 @@
+[server]
+# Taille maximale d'un PDF envoyé depuis l'interface (Mo). Le découpage < 9 Mo se fait côté serveur.
+maxUploadSize = 200
+
+[browser]
+gatherUsageStats = false
