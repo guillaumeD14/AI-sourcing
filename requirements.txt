@@ -1,0 +1,7 @@
+# Python 3.12. Versions de votre application d'origine conservées (streamlit, PyMuPDF, requests) ;
+# pypdf est ajouté (découpage et extraction de repli, testé ici en 5.9.0).
+# Retirés car inutilisés : cloudinary (API REST via requests), scikit-learn, rapidfuzz, pandas/Pillow (déjà tirés par streamlit).
+streamlit==1.65.0
+PyMuPDF==1.26.4
+pypdf==5.9.0
+requests==2.34.2
