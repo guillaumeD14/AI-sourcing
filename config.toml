@@ -1,0 +1,16 @@
+# Habillage Délifrance (palette du guide de direction artistique) : couleurs uniquement ;
+# polices, boutons et pastilles sont réglés par sourcing_theme.py.
+[theme]
+base = "light"
+primaryColor = "#745A4A"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F1ECE0"
+textColor = "#333333"
+font = "sans serif"
+
+[server]
+maxUploadSize = 200
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
