@@ -1,0 +1,20 @@
+# Secrets : jamais dans le dépôt
+.streamlit/secrets.toml
+secrets.toml
+.env
+*.env
+
+# Python / outils
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Index local et fichiers temporaires
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.cache/
+baseline_before_claude/
+*.log
