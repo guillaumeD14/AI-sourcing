@@ -1,0 +1,7 @@
+# Python 3.12. Bornes majeures (les versions exactes sont figées par Streamlit Community Cloud au déploiement).
+# Pour verrouiller exactement : pip install -r requirements.txt && pip freeze > requirements.lock.txt
+streamlit>=1.50,<2
+pymupdf>=1.24,<2
+numpy>=1.26,<3
+pillow>=10.3,<13
+requests>=2.31,<3
